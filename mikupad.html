@@ -1356,7 +1356,7 @@ export async function getTokenCount({ endpoint, endpointAPI, endpointAPIKey, sig
 			return await koboldCppTokenCount({ endpoint, endpointAPIKey, signal, ...options });
 		case API_OPENAI_COMPAT:
 			// These endpoints don't have a token count endpoint...
-			if (new URL(endpoint).host === 'api.openai.com' || new URL(endpoint).host === 'api.together.xyz')
+			if (new URL(endpoint).host === 'api.openai.com' || new URL(endpoint).host === 'api.together.xyz' || new URL(endpoint).host === 'openrouter.ai')
 				return 0;
 
 			// Each backend that exposes an OpenAI-compatible API may have a different token count endpoint.
@@ -1390,7 +1390,7 @@ export async function getTokens({ endpoint, endpointAPI, endpointAPIKey, signal,
 			return await koboldCppTokenize({ endpoint, endpointAPIKey, signal, ...options });
 		case API_OPENAI_COMPAT:
 			// These endpoints don't have a tokenenizer endpoint...
-			if (new URL(endpoint).host === 'api.openai.com' || new URL(endpoint).host === 'api.together.xyz')
+			if (new URL(endpoint).host === 'api.openai.com' || new URL(endpoint).host === 'api.together.xyz' || new URL(endpoint).host === 'openrouter.ai')
 				return [];
 			
 			// Each backend that exposes an OpenAI-compatible API may have a different tokenizer endpoint.
@@ -2015,9 +2015,13 @@ function openaiConvertOptions(options, endpoint, isChat) {
 }
 
 async function* openaiCompletion({ endpoint, endpointAPIKey, proxyEndpoint, signal, ...options }) {
+	const isOpenRouter = endpoint.toLowerCase().includes("openrouter.ai");
 	let finalEndpoint = proxyEndpoint ?? endpoint;
 	if (!finalEndpoint.endsWith("/completions")) {
-		finalEndpoint += "/v1/completions";
+		// OpenRouter has no dedicated text-completion endpoint. Its chat
+		// endpoint accepts a root-level `prompt` string (still present in
+		// `options`) and returns legacy completion-style `choices[].text`.
+		finalEndpoint += isOpenRouter ? "/v1/chat/completions" : "/v1/completions";
 	}
 	const res = await fetch(finalEndpoint, {
 		method: 'POST',
@@ -6242,6 +6246,8 @@ const defaultPresets = {
 	basicStoppingModeType: 'max_tokens',
 	ignoreEos: false,
 	openaiPresets: false,
+	openrouterFallback: false,
+	openrouterProviders: "[]",
 	contextLength: 8192,
 	tokenRatio: 3.3,
 	memoryTokens: ({ "contextOrder":"{memPrefix}{wiPrefix}{wiText}{wiSuffix}{memText}{memSuffix}{prompt}","prefix":"", "text":"", "suffix":""}),
@@ -6540,6 +6546,9 @@ export function App({ sessionStorage, templateStorage, themeStorage, useSessionS
 	const [bannedTokensError, setBannedTokensError] = useState(undefined);
 	const [ignoreEos, setIgnoreEos] = useSessionState('ignoreEos', defaultPresets.ignoreEos);
 	const [openaiPresets, setOpenaiPresets] = useSessionState('openaiPresets', defaultPresets.openaiPresets);
+	const [openrouterFallback, setOpenrouterFallback] = useSessionState('openrouterFallback', defaultPresets.openrouterFallback);
+	const [openrouterProviders, setOpenrouterProviders] = useSessionState('openrouterProviders', defaultPresets.openrouterProviders);
+	const [openrouterProvidersError, setOpenrouterProvidersError] = useState(undefined);
 	const [rejectedAPIKey, setRejectedAPIKey] = useState(false);
 	const [openaiModels, setOpenaiModels] = useState([]);
 	const [tokens, setTokens] = useState(0);
@@ -7380,6 +7389,13 @@ export function App({ sessionStorage, templateStorage, themeStorage, useSessionS
 				...(endpointAPI === API_LLAMA_CPP ? { post_sampling_probs: postSamplingProbs } : {}),
 				stream: useTokenStreaming,
 				...(stopParam.length ? { stop: stopParam } : {}),
+				...(endpointAPI == API_OPENAI_COMPAT && openrouterFallback
+						&& endpoint.trim().toLowerCase().startsWith("https://openrouter.ai") ? {
+					provider: {
+						...(JSON.parse(openrouterProviders).length ? { order: JSON.parse(openrouterProviders) } : {}),
+						allow_fallbacks: true,
+					}
+				} : {}),
 				signal: ac.signal,
 				...(isMikupadEndpoint ? { proxyEndpoint: sessionStorage.proxyEndpoint } : {}),
 				...customParams
@@ -7574,6 +7590,15 @@ export function App({ sessionStorage, templateStorage, themeStorage, useSessionS
 			setStoppingStringsError(e.toString());
 		}
 	}, [stoppingStrings]);
+
+	useEffect(() => {
+		try {
+			JSON.parse(openrouterProviders);
+			setOpenrouterProvidersError(undefined);
+		} catch (e) {
+			setOpenrouterProvidersError(e.toString());
+		}
+	}, [openrouterProviders]);
 
 	useEffect(() => {
 		try {
@@ -8654,7 +8679,18 @@ export function App({ sessionStorage, templateStorage, themeStorage, useSessionS
 							disabled=${!!cancel} value=${openaiPresets} onValueChange=${setOpenaiPresets}/>
 						<${Checkbox} label="Chat Completions API"
 							title="If enabled, the chat API endpoint will be used, and the prompt will be split into chat messages based on the delimiters defined in the selected instruct template."
-							disabled=${!!cancel} value=${useChatAPI} onValueChange=${setUseChatAPI}/>`}
+							disabled=${!!cancel} value=${useChatAPI} onValueChange=${setUseChatAPI}/>
+						${endpoint.trim().toLowerCase().startsWith("https://openrouter.ai") && html`
+							<${Checkbox} label="Fallback Providers"
+								title="If enabled, an OpenRouter provider routing config is sent with each request, allowing fallback to other providers. Specify the providers to use in the field below."
+								disabled=${!!cancel} value=${openrouterFallback} onValueChange=${setOpenrouterFallback}/>
+							${openrouterFallback && html`
+								<${InputBox} label="Providers (JSON array)" type="text" pattern="^\\[.*?\\]$"
+									className="${openrouterProvidersError ? 'rejected' : ''}"
+									tooltip="${openrouterProvidersError ? openrouterProvidersError : 'A JSON array of OpenRouter provider slugs to route to, in order of preference (e.g. [\"openai\", \"together\"]). Leave as [] to allow any provider.'}"
+									readOnly=${!!cancel}
+									value=${openrouterProviders}
+									onValueChange=${setOpenrouterProviders}/>`}`}`}
 					<${Checkbox} label="Token Streaming"
 						disabled=${!!cancel} value=${useTokenStreaming} onValueChange=${setUseTokenStreaming}/>
 					<${Checkbox} label="Prediction Preview"
@@ -9005,7 +9041,7 @@ export function App({ sessionStorage, templateStorage, themeStorage, useSessionS
 				<button
 					title="Run next prediction (Ctrl + Enter)"
 					className=${cancel && !sessionEndpointConnecting ? ((predictStartTokens === tokens && (endpointAPI != API_AI_HORDE || !hordeProcessing)) ? 'processing' : 'completing') : ''}
-					disabled=${!!cancel || stoppingStringsError || drySequenceBreakersError || bannedTokensError}
+					disabled=${!!cancel || stoppingStringsError || drySequenceBreakersError || bannedTokensError || (openrouterFallback && openrouterProvidersError)}
 					onClick=${() => predict()}>
 					Predict
 				</button>
