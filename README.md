@@ -1,3 +1,21 @@
+# What's this?
+
+This is a fork of [lmg-anon/mikupad](https://github.com/lmg-anon/mikupad) with my own personal tweaks and changes.
+
+## What's changed?
+
+Currently, this fork changes:
+```
++ Adds rich support for OpenRouter
+    + Includes fallback providers
+    + Includes chat + text completion*
+```
+> While mikupad semi-supported OpenRouter through OpenAI compat, it lacked rich support.
+
+> \*"Supports" text completion. I say this because OpenRouter doesn't provide a native text completion endpoint, and this implementaion is kinda hacky. It is also heavily dependent on upstream provider/models; some models (like heavily instruct-tuned models) will enforce system-level chat wrapping.
+
+
+# Original Repository Description
 # mikupad
 
 **mikupad** is a user-friendly, browser-based interface for interacting with language models. It's built with ReactJS and supports various text generation backends, all within a single HTML file.
